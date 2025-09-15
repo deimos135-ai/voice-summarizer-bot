@@ -1,0 +1,19 @@
+app = "voice-summarizer-bot" # заміни на свою назву
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[checks]
+  [checks.status]
+    port = 8080
+    type = "tcp"
+    interval = "15s"
+    timeout = "2s"
