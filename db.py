@@ -1,5 +1,5 @@
 import aiosqlite
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from datetime import datetime
 
 DB_PATH = "notes.db"
