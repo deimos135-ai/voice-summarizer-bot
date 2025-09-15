@@ -1,4 +1,5 @@
 app = "voice-summarizer-bot" # заміни на свою назву
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
