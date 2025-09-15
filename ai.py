@@ -2,7 +2,7 @@ import os, json, httpx
 from typing import Dict
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")  # gpt-4o-transcribe | gpt-4o-mini-transcribe | whisper-1
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "whisper-1")  # gpt-4o-transcribe | gpt-4o-mini-transcribe | whisper-1
 ANALYZE_MODEL = os.getenv("ANALYZE_MODEL", "gpt-4o-mini")
 
 ANALYZE_PROMPT = """Ти асистент, який з коротких розмовних нотаток робить структуру.
