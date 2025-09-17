@@ -2,8 +2,10 @@ import os, json, httpx
 from typing import Dict
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "whisper-1")  # gpt-4o-transcribe | gpt-4o-mini-transcribe | whisper-1
-ANALYZE_MODEL = os.getenv("ANALYZE_MODEL", "gpt-4o-mini")
+
+# За замовчуванням повертаємось на whisper-1
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "whisper-1")
+ANALYZE_MODEL    = os.getenv("ANALYZE_MODEL", "gpt-4o-mini")
 
 ANALYZE_PROMPT = """Ти асистент, який з коротких розмовних нотаток робить структуру.
 Поверни JSON формату:
@@ -19,21 +21,19 @@ ANALYZE_PROMPT = """Ти асистент, який з коротких розм
 
 async def whisper_transcribe(file_bytes: bytes, filename: str, language: str = "uk") -> str:
     """
-    Працює як із `whisper-1`, так і з новими `gpt-4o-*-transcribe` через той самий endpoint.
-    Примітка: 4o-transcribe моделі повертають тільки text/json; розширені опції (srt/vtt/verbose_json) — лише для whisper-1. 
+    Пряма робота з OGG/Opus із Telegram для whisper-1.
     """
     url = "https://api.openai.com/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
     files = {"file": (filename, file_bytes, "audio/ogg")}
     data = {"model": TRANSCRIBE_MODEL}
-    # параметр language підтримується; для змішаних мов можна не вказувати
     if language:
         data["language"] = language
+
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(url, headers=headers, data=data, files=files)
         r.raise_for_status()
         j = r.json()
-        # API надає поле "text"
         return j.get("text") or j
 
 async def analyze_notes_text(concatenated_text: str) -> Dict:
