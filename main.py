@@ -1,5 +1,10 @@
-import os, asyncio, httpx, os.path
+import os
+import os.path
+import time
+import asyncio
+import httpx
 from datetime import datetime, timezone
+
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.enums import ParseMode
@@ -27,7 +32,12 @@ dp.include_router(router)
 
 app = FastAPI()
 
-# ===== УТИЛІТИ =====
+# ===== Допоміжне =====
+def ts_to_local_str(ts: int) -> str:
+    """Epoch UTC -> локальний рядок дати/часу."""
+    dt_local = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(TZ)
+    return dt_local.strftime("%Y-%m-%d %H:%M")
+
 async def build_and_send_summary(chat_id: int):
     start_ep, end_ep = today_bounds_epoch()
     rows = await get_notes_between(str(chat_id), start_ep, end_ep)
@@ -47,15 +57,10 @@ async def build_and_send_summary(chat_id: int):
     rendered = render_daily_summary(now_tz().date().isoformat(), author_str, analysis)
     await bot.send_message(chat_id, rendered)
 
-def ts_to_local_str(ts: int) -> str:
-    """Epoch UTC -> локальний рядок дати/часу."""
-    dt_local = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(TZ)
-    return dt_local.strftime("%Y-%m-%d %H:%M")
-
-# ===== ХЕНДЛЕРИ =====
+# ===== Хендлери =====
 @router.message(F.voice)
 async def handle_voice(message: types.Message):
-    # 1) забрати файл із Telegram
+    # 1) завантажити файл із Telegram
     f = await bot.get_file(message.voice.file_id)
     file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{f.file_path}"
     async with httpx.AsyncClient(timeout=90) as client:
@@ -67,7 +72,7 @@ async def handle_voice(message: types.Message):
     text = await whisper_transcribe(file_bytes, filename=os.path.basename(f.file_path), language="uk")
 
     # 3) зберегти як epoch UTC
-    epoch_now = int(datetime.utcnow().timestamp())
+    epoch_now = int(time.time())
     await add_note(str(message.from_user.id), str(message.chat.id), text, epoch_now)
 
     # 4) підтвердження + кнопка «Сформувати звіт»
@@ -91,12 +96,30 @@ async def cmd_today(message: types.Message):
     formatted = "\n\n".join([f"🕘 {ts_to_local_str(r[4])}:\n{r[3]}" for r in rows])
     await message.reply(f"Нотатки за сьогодні:\n\n{formatted}")
 
+@router.message(F.text == "/diag")
+async def cmd_diag(message: types.Message):
+    """Діагностика вікна доби та останніх нот поточного чату."""
+    start_ep, end_ep = today_bounds_epoch()
+    rows = await get_notes_between(str(message.chat.id), start_ep, end_ep)
+    sample = rows[-5:] if rows else []
+    lines = [
+        f"chat_id={message.chat.id}",
+        f"window: [{start_ep}, {end_ep})  (count={len(rows)})",
+    ]
+    for _, user_id, _, text, ts in sample:
+        short = text.replace("\n", " ")
+        if len(short) > 60:
+            short = short[:60] + "…"
+        lines.append(f"- ts={ts} ({ts_to_local_str(ts)}) user={user_id} text={short}")
+    # Виводимо в Markdown-код-блоці
+    await message.reply("```\n" + "\n".join(lines) + "\n```", parse_mode="Markdown")
+
 @router.callback_query(F.data == "make_summary")
 async def on_make_summary(cb: types.CallbackQuery):
     await cb.answer("Готую зведення…")
     await build_and_send_summary(cb.message.chat.id)
 
-# ===== ВЕБХУК/СТАРТ =====
+# ===== Вебхук / старт =====
 async def set_webhook():
     # Вебхук на APP_URL/WEBHOOK_SECRET
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
