@@ -38,14 +38,16 @@ def ts_to_local_str(ts: int) -> str:
     return dt_local.strftime("%Y-%m-%d %H:%M")
 
 async def build_and_send_summary(chat_id: int):
+    """Формує звіт: GPT-аналіз або сирий фолбек, щоб користувач завжди щось отримав."""
     start_ep, end_ep = today_bounds_epoch()
-    print(f"DB_QUERY build_and_send_summary chat={chat_id} window=[{start_ep},{end_ep})")  # LOG
+    print(f"DB_QUERY build_and_send_summary chat={chat_id} window=[{start_ep},{end_ep})")
     rows = await get_notes_between(str(chat_id), start_ep, end_ep)
-    print(f"DB_QUERY rows_count={len(rows)}")  # LOG
+    print(f"DB_QUERY rows_count={len(rows)}")
+
+    today_str = now_tz().date().isoformat()
 
     if not rows:
-        today = now_tz().date().isoformat()
-        await bot.send_message(chat_id, f"**Звіт за {today}**: без нових нотаток.")
+        await bot.send_message(chat_id, f"**Звіт за {today_str}**: без нових нотаток.")
         return
 
     texts, authors = [], set()
@@ -55,9 +57,20 @@ async def build_and_send_summary(chat_id: int):
 
     concat = "\n".join(texts)
     author_str = "кілька учасників" if len(authors) > 1 else (next(iter(authors)) if authors else "—")
-    analysis = await analyze_notes_text(concat)
-    rendered = render_daily_summary(now_tz().date().isoformat(), author_str, analysis)
-    await bot.send_message(chat_id, rendered)
+
+    try:
+        analysis = await analyze_notes_text(concat)
+        rendered = render_daily_summary(today_str, author_str, analysis)
+        await bot.send_message(chat_id, rendered)
+    except Exception as e:
+        # Фолбек: відправляємо сирі нотатки, щоб не було «тиші»
+        print(f"ANALYZE_ERROR: {e}")
+        bullet = "\n".join([f"- {t}" for t in texts])
+        await bot.send_message(
+            chat_id,
+            f"**Звіт за {today_str} ({author_str})**\n"
+            f"_Аналіз тимчасово недоступний; нижче сирі нотатки:_\n{bullet}"
+        )
 
 # ===== Хендлери =====
 @router.message(F.voice)
@@ -78,7 +91,7 @@ async def handle_voice(message: types.Message):
     chat_id_str = str(message.chat.id)
     user_id_str = str(message.from_user.id)
     await add_note(user_id_str, chat_id_str, text, epoch_now)
-    print(f"DB_SAVE chat={chat_id_str} user={user_id_str} ts={epoch_now}")  # LOG
+    print(f"DB_SAVE chat={chat_id_str} user={user_id_str} ts={epoch_now}")
 
     # 4) підтвердження + кнопка «Сформувати звіт»
     preview = (text[:200] + "…") if len(text) > 200 else text
@@ -90,6 +103,20 @@ async def handle_voice(message: types.Message):
 @router.message(F.text == "/summary")
 async def cmd_summary(message: types.Message):
     await build_and_send_summary(message.chat.id)
+
+@router.message(F.text == "/summary_raw")
+async def cmd_summary_raw(message: types.Message):
+    """Швидкий сирий звіт без GPT — для перевірки збереження нотаток."""
+    start_ep, end_ep = today_bounds_epoch()
+    rows = await get_notes_between(str(message.chat.id), start_ep, end_ep)
+    today_str = now_tz().date().isoformat()
+    if not rows:
+        await message.reply(f"**Сирий звіт за {today_str}**: без нових нотаток.")
+        return
+    lines = [f"**Сирий звіт за {today_str}:**"]
+    for _, user_id, _, text, ts in rows:
+        lines.append(f"- {ts_to_local_str(ts)}: {text}")
+    await message.reply("\n".join(lines))
 
 @router.message(F.text == "/today")
 async def cmd_today(message: types.Message):
