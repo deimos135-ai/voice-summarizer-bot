@@ -2,7 +2,7 @@ import os
 import pytz
 from datetime import datetime, timedelta
 
-# Таймзона проєкту (можеш змінити змінною середовища TZ)
+# Локальна TZ (можна передати через env TZ=Europe/Kyiv)
 TZ = pytz.timezone(os.getenv("TZ", "Europe/Kyiv"))
 
 def now_tz() -> datetime:
@@ -12,13 +12,11 @@ def now_tz() -> datetime:
 def today_bounds_epoch():
     """
     Межі 'сьогодні' у ЛОКАЛЬНІЙ TZ -> (start_utc_epoch, end_utc_epoch), де end НЕ включно.
-    Важливо: використовуємо replace(...) на вже таймзонованому now_tz(),
-    щоб коректно проходити через DST/зсуви.
+    Важливо: використовуємо replace(...) на вже таймзонованому now_tz().
     """
     n = now_tz()
     start_local = n.replace(hour=0, minute=0, second=0, microsecond=0)
     end_local = start_local + timedelta(days=1)  # [start, end)
-
     start_utc = start_local.astimezone(pytz.UTC)
     end_utc = end_local.astimezone(pytz.UTC)
     return int(start_utc.timestamp()), int(end_utc.timestamp())
