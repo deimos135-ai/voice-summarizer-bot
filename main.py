@@ -12,15 +12,15 @@ from aiogram.types import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.default import DefaultBotProperties
 
 from util import now_tz, today_bounds_epoch, next_run_at, TZ
-from db import init_db, add_note, get_notes_between
+from db import init_db, add_note, get_notes_between, get_last_n
 from ai import whisper_transcribe, analyze_notes_text, render_daily_summary
 
 APP_URL        = os.getenv("APP_URL")             # https://<your-app>.fly.dev
 BOT_TOKEN      = os.getenv("TG_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GROUP_ID       = int(os.getenv("GROUP_ID", "0"))  # -100123456789 для груп/каналів
+GROUP_ID       = int(os.getenv("GROUP_ID", "0"))  # -100123456789 (група/канал)
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret-path")
-RUN_DAILY      = os.getenv("RUN_DAILY", "1")      # "1" -> вмикати внутрішній планувальник
+RUN_DAILY      = os.getenv("RUN_DAILY", "1")
 
 if not (APP_URL and BOT_TOKEN and OPENAI_API_KEY and GROUP_ID):
     raise RuntimeError("APP_URL, TG_TOKEN, OPENAI_API_KEY, GROUP_ID є обов'язковими env")
@@ -34,13 +34,15 @@ app = FastAPI()
 
 # ===== Допоміжне =====
 def ts_to_local_str(ts: int) -> str:
-    """Epoch UTC -> локальний рядок дати/часу."""
     dt_local = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(TZ)
     return dt_local.strftime("%Y-%m-%d %H:%M")
 
 async def build_and_send_summary(chat_id: int):
     start_ep, end_ep = today_bounds_epoch()
+    print(f"DB_QUERY build_and_send_summary chat={chat_id} window=[{start_ep},{end_ep})")  # LOG
     rows = await get_notes_between(str(chat_id), start_ep, end_ep)
+    print(f"DB_QUERY rows_count={len(rows)}")  # LOG
+
     if not rows:
         today = now_tz().date().isoformat()
         await bot.send_message(chat_id, f"**Звіт за {today}**: без нових нотаток.")
@@ -60,7 +62,7 @@ async def build_and_send_summary(chat_id: int):
 # ===== Хендлери =====
 @router.message(F.voice)
 async def handle_voice(message: types.Message):
-    # 1) завантажити файл із Telegram
+    # 1) забрати файл із Telegram
     f = await bot.get_file(message.voice.file_id)
     file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{f.file_path}"
     async with httpx.AsyncClient(timeout=90) as client:
@@ -73,7 +75,10 @@ async def handle_voice(message: types.Message):
 
     # 3) зберегти як epoch UTC
     epoch_now = int(time.time())
-    await add_note(str(message.from_user.id), str(message.chat.id), text, epoch_now)
+    chat_id_str = str(message.chat.id)
+    user_id_str = str(message.from_user.id)
+    await add_note(user_id_str, chat_id_str, text, epoch_now)
+    print(f"DB_SAVE chat={chat_id_str} user={user_id_str} ts={epoch_now}")  # LOG
 
     # 4) підтвердження + кнопка «Сформувати звіт»
     preview = (text[:200] + "…") if len(text) > 200 else text
@@ -98,7 +103,7 @@ async def cmd_today(message: types.Message):
 
 @router.message(F.text == "/diag")
 async def cmd_diag(message: types.Message):
-    """Діагностика вікна доби та останніх нот поточного чату."""
+    """Діагностика вікна доби + останні нотатки поточного чату."""
     start_ep, end_ep = today_bounds_epoch()
     rows = await get_notes_between(str(message.chat.id), start_ep, end_ep)
     sample = rows[-5:] if rows else []
@@ -111,7 +116,21 @@ async def cmd_diag(message: types.Message):
         if len(short) > 60:
             short = short[:60] + "…"
         lines.append(f"- ts={ts} ({ts_to_local_str(ts)}) user={user_id} text={short}")
-    # Виводимо в Markdown-код-блоці
+    await message.reply("```\n" + "\n".join(lines) + "\n```", parse_mode="Markdown")
+
+@router.message(F.text == "/diag_all")
+async def cmd_diag_all(message: types.Message):
+    """10 останніх нот по всій БД — для швидкої перевірки запису."""
+    rows = await get_last_n(10)
+    if not rows:
+        await message.reply("БД порожня.")
+        return
+    lines = []
+    for _id, user_id, chat_id, text, ts in rows:
+        short = text.replace("\n", " ")
+        if len(short) > 60:
+            short = short[:60] + "…"
+        lines.append(f"#{_id} chat={chat_id} user={user_id} ts={ts} ({ts_to_local_str(ts)}) :: {short}")
     await message.reply("```\n" + "\n".join(lines) + "\n```", parse_mode="Markdown")
 
 @router.callback_query(F.data == "make_summary")
